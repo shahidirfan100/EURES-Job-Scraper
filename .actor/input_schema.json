@@ -1,0 +1,45 @@
+{
+  "title": "EURES Job Scraper",
+  "description": "Scrape job vacancies from EURES using fast API capture from the search listing pages.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Specific EURES search URL. If omitted, a default URL is used.",
+      "editor": "textfield",
+      "prefill": "https://europa.eu/eures/portal/jv-se/search?page=1&resultsPerPage=10&orderBy=BEST_MATCH&keywordsEverywhere=admin&lang=en"
+    },
+    "results_wanted": {
+      "title": "Results Wanted",
+      "type": "integer",
+      "description": "Maximum number of vacancies to save.",
+      "editor": "number",
+      "minimum": 1,
+      "maximum": 10000,
+      "prefill": 20,
+      "default": 20
+    },
+    "max_pages": {
+      "title": "Max Pages",
+      "type": "integer",
+      "description": "Maximum number of listing pages to process.",
+      "editor": "number",
+      "minimum": 1,
+      "maximum": 200,
+      "prefill": 10,
+      "default": 10
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Proxy settings to reduce blocking.",
+      "editor": "proxy",
+      "prefill": {
+        "useApifyProxy": false
+      }
+    }
+  },
+  "required": []
+}

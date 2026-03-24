@@ -1,0 +1,8 @@
+{
+  "startUrl": "https://europa.eu/eures/portal/jv-se/search?page=1&resultsPerPage=10&orderBy=BEST_MATCH&keywordsEverywhere=admin&lang=en",
+  "results_wanted": 20,
+  "max_pages": 5,
+  "proxyConfiguration": {
+    "useApifyProxy": false
+  }
+}

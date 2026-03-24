@@ -1,0 +1,20 @@
+{
+  "actorSpecification": 1,
+  "title": "EURES Jobs Dataset",
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "identifier",
+          "title",
+          "company",
+          "location_country",
+          "location_region",
+          "publication_date",
+          "url"
+        ]
+      }
+    }
+  }
+}

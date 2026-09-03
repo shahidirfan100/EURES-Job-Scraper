@@ -11,13 +11,42 @@
       "editor": "textfield",
       "prefill": "https://europa.eu/eures/portal/jv-se/search?page=1&resultsPerPage=10&orderBy=BEST_MATCH&keywordsEverywhere=admin&lang=en"
     },
+    "keyword": {
+      "title": "Keyword",
+      "type": "string",
+      "description": "Optional keyword searched across EURES vacancy fields. Overrides keywords from startUrl when provided.",
+      "editor": "textfield",
+      "prefill": "admin"
+    },
+    "location": {
+      "title": "Location code",
+      "type": "string",
+      "description": "Optional EURES location or NUTS code, such as fi1b. Use comma-separated codes for multiple locations.",
+      "editor": "textfield"
+    },
+    "country": {
+      "title": "Country code",
+      "type": "string",
+      "description": "Optional ISO country code used by EURES, such as fi or de. Use comma-separated codes for multiple countries.",
+      "editor": "textfield",
+      "prefill": "fi"
+    },
+    "sort": {
+      "title": "Sort order",
+      "type": "string",
+      "description": "Choose how EURES orders matching vacancies.",
+      "editor": "select",
+      "enum": ["BEST_MATCH", "MOST_RECENT"],
+      "enumTitles": ["Best Match", "Most Recent"],
+      "prefill": "MOST_RECENT",
+      "default": "BEST_MATCH"
+    },
     "results_wanted": {
       "title": "Results Wanted",
       "type": "integer",
       "description": "Maximum number of vacancies to save.",
       "editor": "number",
       "minimum": 1,
-      "maximum": 10000,
       "prefill": 20,
       "default": 20
     },
@@ -27,18 +56,8 @@
       "description": "Maximum number of listing pages to process.",
       "editor": "number",
       "minimum": 1,
-      "maximum": 200,
       "prefill": 10,
       "default": 10
-    },
-    "proxyConfiguration": {
-      "title": "Proxy configuration",
-      "type": "object",
-      "description": "Proxy settings to reduce blocking.",
-      "editor": "proxy",
-      "prefill": {
-        "useApifyProxy": false
-      }
     }
   },
   "required": []

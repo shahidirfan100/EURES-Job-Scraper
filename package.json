@@ -1,11 +1,18 @@
 {
   "name": "eures-job-scraper",
-  "version": "1.0.0",
+  "version": "1.0",
   "description": "Scrape EURES job vacancies with structured and clean output for analytics and automation.",
   "type": "module",
   "dependencies": {
     "apify": "^3.7.2",
-    "cheerio": "^1.2.0"
+    "cheerio": "^1.2.0",
+    "impit": "^0.14.2"
+  },
+  "devDependencies": {
+    "@apify/eslint-config": "^1.0.0",
+    "eslint": "^9.29.0",
+    "eslint-config-prettier": "^10.1.5",
+    "prettier": "^3.5.3"
   },
   "scripts": {
     "start": "node src/main.js",

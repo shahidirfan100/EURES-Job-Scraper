@@ -1,6 +1,7 @@
-import { Actor, log } from 'apify';
-import { gotScraping } from 'got-scraping';
 import { readFile } from 'node:fs/promises';
+
+import { Actor, log } from 'apify';
+import { Impit } from 'impit';
 
 await Actor.init();
 
@@ -8,6 +9,9 @@ const DEFAULT_START_URL = 'https://europa.eu/eures/portal/jv-se/search?page=1&re
 const API_SEARCH_ENDPOINT = 'https://europa.eu/eures/api/jv-searchengine/public/jv-search/search';
 const MAX_BATCH_SIZE = 50;
 const REQUEST_TIMEOUT_MS = 30000;
+const MAX_REQUEST_RETRIES = 2;
+const RETRYABLE_STATUS_CODES = new Set([408, 413, 429, 500, 502, 503, 504, 521, 522, 524]);
+const SUPPORTED_SORTS = new Set(['BEST_MATCH', 'MOST_RECENT']);
 
 const loadLocalInput = async () => {
     try {
@@ -25,6 +29,10 @@ const {
     startUrl,
     startUrls,
     url,
+    keyword,
+    location,
+    country,
+    sort,
     results_wanted: resultsWantedRaw = 20,
     max_pages: maxPagesRaw = 10,
     proxyConfiguration,
@@ -68,7 +76,7 @@ const sanitizeValue = (value) => {
 
     if (typeof value === 'string') {
         const trimmed = value.trim();
-        return trimmed ? trimmed : undefined;
+        return trimmed || undefined;
     }
 
     if (Array.isArray(value)) {
@@ -191,23 +199,30 @@ const parseKeywords = (searchParams) => {
     const keywords = [];
     for (const [param, specificSearchCode] of mapping) {
         const raw = searchParams.get(param);
-        const keyword = normalizeText(raw);
-        if (!keyword) continue;
-        keywords.push({ keyword, specificSearchCode });
+        const keywordText = normalizeText(raw);
+        if (!keywordText) continue;
+        keywords.push({ keyword: keywordText, specificSearchCode });
     }
 
     return keywords;
 };
 
-const parseSourceConfig = (sourceUrl) => {
+const normalizeSortSearch = (value) => {
+    const normalized = normalizeText(value).toUpperCase().replace(/[\s-]+/g, '_');
+    return SUPPORTED_SORTS.has(normalized) ? normalized : undefined;
+};
+
+const parseSourceConfig = (sourceUrl, filterOverrides = {}) => {
     const parsed = new URL(sourceUrl);
-    const searchParams = parsed.searchParams;
+    const { searchParams } = parsed;
 
     const pageValue = Number.parseInt(searchParams.get('page') || '1', 10);
     const resultsPerPageValue = Number.parseInt(searchParams.get('resultsPerPage') || '10', 10);
 
     const lang = normalizeText(searchParams.get('lang')) || 'en';
-    const keywords = parseKeywords(searchParams);
+    const keywords = filterOverrides.keyword
+        ? [{ keyword: filterOverrides.keyword, specificSearchCode: 'EVERYWHERE' }]
+        : parseKeywords(searchParams);
 
     const criteria = {
         keywords,
@@ -220,11 +235,13 @@ const parseSourceConfig = (sourceUrl) => {
         educationAndQualificationLevelCodes: parseCsv(searchParams.get('educationAndQualificationLevel')),
         educationGroupCodes: parseCsv(searchParams.get('educationGroupCodes')),
         positionOfferingCodes: parseCsv(searchParams.get('positionOfferingCodes')),
-        locationCodes: parseCsv(searchParams.get('locationCodes')),
+        locationCodes: filterOverrides.hasExplicitLocation
+            ? filterOverrides.locationCodes
+            : parseCsv(searchParams.get('locationCodes')),
         euresFlagCodes: parseCsv(searchParams.get('euresFlagCodes')),
         otherBenefitsCodes: parseCsv(searchParams.get('otherBenefitsCodes')),
         requiredLanguages: parseRequiredLanguages(searchParams.get('requiredLanguages')),
-        sortSearch: normalizeText(searchParams.get('orderBy')) || 'BEST_MATCH',
+        sortSearch: filterOverrides.sortSearch || normalizeSortSearch(searchParams.get('orderBy')) || 'BEST_MATCH',
         page: Number.isFinite(pageValue) && pageValue > 0 ? pageValue : 1,
         resultsPerPage: Number.isFinite(resultsPerPageValue) && resultsPerPageValue > 0
             ? Math.min(resultsPerPageValue, MAX_BATCH_SIZE)
@@ -232,7 +249,7 @@ const parseSourceConfig = (sourceUrl) => {
         minNumberPost: Number.isFinite(+searchParams.get('minNumberPost')) ? +searchParams.get('minNumberPost') : null,
         sessionId: createSessionId(),
         requestLanguage: lang,
-        userPreferredLanguage: normalizeText(searchParams.get('jvDisplayLanguage')) || lang,
+        userPreferredLanguage: normalizeText(searchParams.get('jvDisplayLanguage')) || null,
     };
 
     return {
@@ -298,25 +315,51 @@ if (typeof url === 'string' && url.trim()) requestCandidates.push(url.trim());
 if (!requestCandidates.length) requestCandidates.push(DEFAULT_START_URL);
 
 const uniqueRequestCandidates = [...new Set(requestCandidates)];
-const sourceConfigs = uniqueRequestCandidates.map(parseSourceConfig);
+const inputKeyword = normalizeText(keyword) || undefined;
+const inputLocationCodes = parseCsv(location);
+const inputCountryCodes = parseCsv(country);
+const hasExplicitLocation = inputLocationCodes.length > 0 || inputCountryCodes.length > 0;
+const inputSort = normalizeSortSearch(sort);
+
+if (normalizeText(sort) && !inputSort) {
+    log.warning('Ignoring unsupported sort value. Use BEST_MATCH or MOST_RECENT.');
+}
+
+const inputFilters = {
+    keyword: inputKeyword,
+    locationCodes: [...inputCountryCodes, ...inputLocationCodes],
+    hasExplicitLocation,
+    sortSearch: inputSort,
+};
+const sourceConfigs = uniqueRequestCandidates.map((candidate) => parseSourceConfig(candidate, inputFilters));
+
+log.info(`Starting EURES search | sources=${sourceConfigs.length} | target=${RESULTS_WANTED} | max_pages=${MAX_PAGES}`);
 
 const proxyInput = proxyConfiguration && typeof proxyConfiguration === 'object' ? proxyConfiguration : undefined;
 const useApifyProxy = Boolean(proxyInput?.useApifyProxy);
 const proxyConf = useApifyProxy
     ? await Actor.createProxyConfiguration({ ...proxyInput, useApifyProxy: true })
     : undefined;
+const proxyUrl = proxyConf ? await proxyConf.newUrl() : undefined;
+const client = new Impit({
+    browser: 'chrome',
+    ignoreTlsErrors: true,
+    ...(proxyUrl && { proxyUrl }),
+});
 
 const seenRecordKeys = new Set();
 let pendingBatch = [];
 let saved = 0;
 
-const flushBatch = async (reason) => {
+const flushBatch = async () => {
     if (!pendingBatch.length) return;
     const payload = pendingBatch;
     pendingBatch = [];
     await dataset.pushData(payload);
     saved += payload.length;
-    log.info(`Pushed ${payload.length} records in batch (${reason}). Total pushed: ${saved}`);
+    if (saved % MAX_BATCH_SIZE === 0 && saved < RESULTS_WANTED) {
+        log.info(`Progress: ${saved}/${RESULTS_WANTED} records`);
+    }
 };
 
 const pushIfAvailable = async (candidate) => {
@@ -339,28 +382,49 @@ const pushIfAvailable = async (candidate) => {
     }
 };
 
-const fetchPage = async (criteria, proxyUrl) => {
-    const response = await gotScraping.post(API_SEARCH_ENDPOINT, {
-        responseType: 'json',
-        proxyUrl,
-        json: criteria,
-        timeout: { request: REQUEST_TIMEOUT_MS },
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0',
-            'Accept': 'application/json, text/plain, */*',
-            'Content-Type': 'application/json;charset=UTF-8',
-            'Origin': 'https://europa.eu',
-            'Referer': 'https://europa.eu/eures/portal/jv-se/search?lang=en',
-        },
-    });
+const fetchPage = async (criteria, sourceUrl) => {
+    let lastError;
 
-    return response.body;
+    for (let attempt = 0; attempt <= MAX_REQUEST_RETRIES; attempt++) {
+        try {
+            const response = await client.fetch(API_SEARCH_ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // EURES closes compressed responses without TLS close_notify; identity avoids truncated-stream errors.
+                    'Accept-Encoding': 'identity',
+                    Referer: sourceUrl,
+                },
+                body: JSON.stringify(criteria),
+                timeout: REQUEST_TIMEOUT_MS,
+                redirect: 'follow',
+            });
+
+            if (response.ok) return await response.json();
+
+            const error = new Error(`HTTP ${response.status}`);
+            if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_REQUEST_RETRIES) throw error;
+            lastError = error;
+        } catch (error) {
+            lastError = error;
+            if (attempt === MAX_REQUEST_RETRIES) throw error;
+            if (error.message.startsWith('HTTP ') && !RETRYABLE_STATUS_CODES.has(Number(error.message.slice(5)))) {
+                throw error;
+            }
+        }
+
+        const delayMs = (attempt + 1) * 500;
+        log.warning(`Retrying page ${criteria.page} after request failure (${attempt + 1}/${MAX_REQUEST_RETRIES})`);
+        await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+        });
+    }
+
+    throw lastError || new Error('Request failed');
 };
 
 for (const source of sourceConfigs) {
     if (saved >= RESULTS_WANTED) break;
-
-    log.info(`Processing source: ${source.sourceUrl}`);
 
     const basePage = Math.max(1, Number(source.criteria.page) || 1);
     const perPage = Math.max(1, Math.min(MAX_BATCH_SIZE, Number(source.criteria.resultsPerPage) || 10));
@@ -374,20 +438,19 @@ for (const source of sourceConfigs) {
         const requestCriteria = {
             ...source.criteria,
             page: basePage + pageOffset,
-            resultsPerPage: Math.min(perPage, remaining),
+            // EURES uses resultsPerPage to calculate page offsets; keep it stable to avoid overlapping pages.
+            resultsPerPage: perPage,
         };
 
         let data;
         try {
-            const proxyUrl = proxyConf ? await proxyConf.newUrl() : undefined;
-            data = await fetchPage(requestCriteria, proxyUrl);
+            data = await fetchPage(requestCriteria, source.sourceUrl);
         } catch (error) {
             log.error(`Request failed for page ${requestCriteria.page}: ${error.message}`);
             break;
         }
 
         const items = Array.isArray(data?.jvs) ? data.jvs : [];
-        log.info(`Page ${requestCriteria.page}: received ${items.length} jobs`);
 
         if (!items.length) break;
 
@@ -397,12 +460,12 @@ for (const source of sourceConfigs) {
             await pushIfAvailable(mapped);
         }
 
-        await flushBatch(`page-${requestCriteria.page}`);
+        await flushBatch();
 
         if (items.length < requestCriteria.resultsPerPage) break;
     }
 }
 
-await flushBatch('final');
+await flushBatch();
 log.info(`Finished. Saved ${saved} job records.`);
 await Actor.exit();

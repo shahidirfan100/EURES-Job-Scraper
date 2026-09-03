@@ -1,5 +1,9 @@
 {
   "startUrl": "https://europa.eu/eures/portal/jv-se/search?page=1&resultsPerPage=10&orderBy=BEST_MATCH&keywordsEverywhere=admin&lang=en",
+  "keyword": "admin",
+  "location": "",
+  "country": "fi",
+  "sort": "MOST_RECENT",
   "results_wanted": 20,
   "max_pages": 5,
   "proxyConfiguration": {
